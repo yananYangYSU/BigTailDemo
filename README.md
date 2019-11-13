@@ -282,3 +282,17 @@ $ /usr/local/tomcat/apache-tomcat-8.5.47/bin/startup.sh
 
 ### Step 4: Test the load generator
 Open the exlporer and visit url `http://192.168.3.110:8080/sdcloud`
+The GUI page is showed as follows:
+
+
+![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191113230835.png?raw=true)
+ 
+
+goOnlineQuery.do?serviceId=0
+
+setIntensity.do?intensity=20&serviceId=0
+
+stopOnlineQuery.do?serviceId=0
+
+startOnlineQuery.do?intensity=1&serviceId=0
+![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191112164606.png?raw=true)
