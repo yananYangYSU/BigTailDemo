@@ -30,6 +30,7 @@ The load generator is a Java maven project which is implemented using httpclient
 
 ## Hardware environment
 In our experiment environment, the configuration of nodes are shown as below:
+
 | hostname | description | IP |
 | ---- | ---- | ---- |
 | node1 | where the load generator is deployed | 192.168.3.110 |
