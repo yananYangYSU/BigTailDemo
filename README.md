@@ -266,8 +266,8 @@ The load generator is a Java maven project which is implemented using httpclient
            |                |     |----/loadDriver/*  # generate request loads
            |                |     |----/recordDriver/* # record request metrics
            |                |     +----/strategy/* 
-           |                |----/respository/*   # in-memory data storage      
-		   |                |----/rmi/*       # RMI service and interfaces   
+           |                |----/respository/*   # in-memory data storage  
+           |                |----/rmi/*       # RMI service and interfaces   
            |                +----/tools/*   # some tools
            |----/resources/*  # configuration files
            +----/webapp/*     # GUI pages
