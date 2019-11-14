@@ -287,12 +287,32 @@ The GUI page is showed as follows:
 
 ![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191113230835.png?raw=true)
  
+We provide four url interfaces to control the load generator, including:
 
-goOnlineQuery.do?serviceId=0
+| url interface | description | parameter |
+| ---- | ---- | ---- |
+| `startOnlineQuery.do?intensity=1&serviceId=0` |  start to generate the request load | intensity: concurrent requests per second (RPS) <br> serviceId: inference service index num  |
+| `goOnlineQuery.do?serviceId=0` |  visit the real-time latency page |  serviceId: inference service index num  |
+| `setIntensity.do?intensity=20&serviceId=0` |   change the RPS dynamically | intensity: RPS <br> serviceId: inference service index num  |
+| `stopOnlineQuery.do?serviceId=0` |   stop the load generator |  ---  |
 
-setIntensity.do?intensity=20&serviceId=0
+For examle, firstly, we click the `startOnlineQuery.do?intensity=1&serviceId=0` link to generate request loads, and the page will in a waiting state, then after `$windowSize seconds`, click the `goOnlineQuery.do?serviceId=0` link to the real-time latency page as follows. 
 
-stopOnlineQuery.do?serviceId=0
-
-startOnlineQuery.do?intensity=1&serviceId=0
 ![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191112164606.png?raw=true)
+Metrics in real-time latency page:
+* queryTime: The 99th tail-latency of the concurrent requests per second
+* realRPS: The concurrent requests number of last second from client, RPS (request per second)
+* realQPS: The response number of last second in server, QPS (query per second)
+* AvgRPS: The average concurrent RPS in `$windowsize` time scale
+* AvgQPS: The average QPS in `$windowsize` time scale
+* SR: The average service rate in `$windowsize` time scale, `SR=AvgQPS/AvgRPS*100%`
+* Avg99th: The average `queryTimes` in `$windowsize` time scale   
+
+At the runtime of load generator, click the `setIntensity.do?intensity=N&serviceId=0` link to change the RPS, please replace `N` to the number of concurrent requests per second you want. Finally, click `stopOnlineQuery.do?serviceId=0` to stop the load testing.
+
+## Part 3: Performance evaluation of tools
+We evaluate the performance of load generator tool and web inference service and show the results as follows: 
+### Performance evaluation of load generator
+we set the request url in `LoadGen/src/main/resources/conf/sys.properties` to a empty url `imageClassifyBaseURL=http://192.168.3.130:31500/helloworld`, and test the concurrent ability of load generator
+
+![evaluationOfLoadGen](https://github.com/yananYangYSU/BigTailDemo/blob/master/evaluationOfLoadGen.png?raw=true)
