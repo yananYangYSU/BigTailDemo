@@ -1,4 +1,249 @@
-# Load generator
+# Web inference service for MLperf benchmark 
+
+Based on the [MLperf](https://github.com/mlperf/inference), we packaged the inference model into web services in addtion to the existing script operation mode. And we also contribute a load generator to send http requests for measurement. The web service is implemented using python flask+guicorn framework which can work in concurrent requests scenarios. The load generator is implemented using java httpclient+threadpool that provides [open-loop](https://ieeexplore_ieee.xilesou.top/abstract/document/7581261/) [1] request load, and it can generate dynamically changeable request loads. We designed a web GUI for the realtime latency watch (e.g., 99th tail-latency, QPS, RPS, etc.). Meanwhile, we also provided RMI interfaces for external call to support runtime control and data collection.
+
+## Web inference
+* currently support `mobilenet-coco300-tf` and `resnet-coco1200-tf` model inference, in continuous update... (easy to scale)
+* support mutil-process server end in single GPU card
+* provide docker image for fast build and source code for download 
+* support the service building and scaling using kubernetes 
+## Load generator
+* support thousands level concurrent request per second
+* support dynamiclly changeable QPS in open-loop
+* support web GUI for real-time latency watch
+* support RMI interface for external call
+
+# Building and installation
+The steps of building the web service and load generator are shown as below:
+
+## Hardware environment
+In our experiment environment, the configuration of nodes are shown as below:
+
+| hostname | description | IP | role |
+| ---- | ---- | ---- | ----|
+| tank-node1 | where the load generator is deployed | 192.168.3.110 | k8s master |
+| tank-node3 | where the inference service is deployed | 192.168.3.130 | k8s slave |
+
+## Part 1: Build web inference service
+Here we use the `mobilenet-coco300-tf` model as an example, which uses 300px*300px size of coco dataset and tensorflow framework
+
+### Step 1. Prepare the web service runtime environment
+We provide the well-configured docker image for download (Recommended)
+```Bash
+$ docker pull ynyang/mobilenet-coco-flask:v1
+```
+In another way, you can use the Dockerfile to build image (Optional), the `Dockerfile` is shown as below:
+
+```
+# Content of DockerFile
+# install the runtime env and library
+FROM tensorflow/tensorflow:1.13.1-gpu-py3-jupyter
+MAINTAINER YananYang
+RUN pip install pillow
+RUN pip install opencv-python
+RUN apt-get update && apt-get install -y libsm6 libxrender1 libxext-dev
+RUN pip install Cython
+RUN pip install pycocotools
+RUN pip install gunicorn
+RUN pip install flask 
+RUN pip install gevent
+rm -rf /var/lib/apt/lists/*
+```
+The command for building docker image using `Dockerfile` 
+```bash
+$ docker build -t ynyang/mobilenet-coco-flask:v1 .
+```
+### Step 2. Prepare the image dataset of coco
+
+| dataset | picture download link | annotation download link |
+| ---- | ---- | ----|
+| coco (validation) | http://images.cocodataset.org/zips/val2017.zip | http://images.cocodataset.org/annotations/stuff_annotations_trainval2017.zip
+
+Download the coco image dataset and scale the pictures to 300px*300px size. The scale tool is [here](../../../tools/upscale_coco).
+You can run it for ssd-mobilenet like:
+```bash
+python upscale_coco.py --inputs /data/coco/ --outputs /data/coco-300 --size 300 300 --format png
+```
+The ready dataset and nanotation should be like this:
+```bash
+$ ls /home/tank/yanan/data/coco-300/
+annotations  val2017
+```
+The storage directory path can be optionally specify in your system, but notice the directory `annotations` and `val2017` should be **in the same level directory**
+
+### Step 3. Prepare the trained inference model
+| model | framework | accuracy | dataset | model link | model source | precision | notes |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| ssd-mobilenet 300x300 quantized finetuned | tensorflow | mAP 0.23594 | coco resized to 300x300 | [from zenodo](https://zenodo.org/record/3252084/files/mobilenet_v1_ssd_8bit_finetuned.tar.gz) | Habana | int8 | ??? |
+
+Download the model from the linke, and the ready trained inference model should be like this:
+```bash
+$ ls /home/tank/yanan/model
+ssd_mobilenet_v1_coco_2018_01_28.pb
+```
+### Step 4. Prepare the start script for web service
+`start-service-mobilenet-coco300-tf.sh` is used to start the web service process of  inference model when container is created 
+
+The content of `start-service-mobilenet-coco300-tf.sh` is shown as below:
+```bash
+#!/bin/bash
+# These shell commands are executed in container
+cd /home/inference/v0.5/classification_and_detection/python/webservice
+gunicorn -w 8 -b 0.0.0.0:5000 web_mobilenet_coco300_tf:app
+```
+> -w: number of web service process in one GPU card
+
+The ready start script of service should be like this:
+```bash
+$ ls /home/tank/yanan/script
+start-service-mobilenet-coco300-tf.sh
+```
+### Step 5. Create docker container
+
+We use the kubernetes to create pod and service for the inference model, the container mounts host's files and directories to it's volume when it is created
+
+Files and directories in host machine are shown as below:
+```bash
+/home/tank/yanan
+           |----/data/coco-300
+           |          |----/annotations/instances_val2017.json
+           |          +----/val2017/00000xxxxx.jpg
+           |----/model/ssd_mobilenet_v1_coco_2018_01_28.pb
+           |----/script/start-service-mobilenet-coco300-tf.sh
+           +----/inference/v0.5/classification_and_detection/*
+```
+Files and directories in container are shown as below:
+```bash
+/----/home
+ |    |----/script/start-service-mobilenet-coco300-tf.sh
+ |    +----/inference/v0.5/classification_and_detection/*   
+ |----/data/coco-300
+ |          |----/annotations/instances_val2017.json
+ |          +----/val2017/00000xxxxx.jpg
+ +----/model/ssd_mobilenet_v1_coco_2018_01_28.pb
+```
+Then use `create-pod.yaml` to create pod in kubernetes `master` node
+```bash
+$ kubectl create -f create-pod.yaml
+pod/mobilenet-coco300-pod created
+$ kubectl get pods -n yyn
+NAME                     READY   STATUS    RESTARTS   AGE
+mobilenet-coco300-pod0   1/1     Running   0          19s
+```
+
+The content of `create-pod.yaml` is shown as below:
+```python
+apiVersion: v1                          # api version
+kind: Pod                               # component type
+metadata:
+  name: mobilenet-coco300-pod0
+  namespace: yyn
+  labels:                               # label
+    app: mobilenet-coco300-app-label
+spec:
+  nodeName: tank-node3                  # node that you want to deploy pod in
+  containers:
+  - name: mobilenet-coco300-flask-con      # container name
+    image: ynyang/mobilenet-coco-flask:v1   # image
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 5000              # service port in container
+    env:
+    - name: CUDA_VISIBLE_DEVICES
+      value: "0"                       # use GPU card 0 (e.g. 1,2)
+    command: ["sh", "-c", "/home/script/start-service-mobilenet-coco300-tf.sh"]
+    volumeMounts:                      # paths in container
+    - name: model-path
+      mountPath: /model
+    - name: data-path
+      mountPath: /data
+    - name: code-path
+      mountPath: /home/inference
+    - name: script-path
+      mountPath: /home/script
+  volumes:  
+  - name: model-path
+    hostPath:                          # paths in host machine
+      path: /home/tank/yanan/model
+  - name: data-path
+    hostPath:
+      path: /home/tank/yanan/data
+  - name: code-path
+    hostPath:
+      path: /home/tank/yanan/inference
+  - name: script-path
+    hostPath:
+      path: /home/tank/yanan/script
+```
+
+After the pod is created, use `create-service.yaml` to create service in kubernetes master node
+```bash
+$ kubectl create -f create-service.yaml
+pod/mobilenet-coco300-service created
+$ kubectl get service -n yyn
+NAME                        TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+mobilenet-coco300-service   NodePort   10.105.250.36   <none>        5000:31500/TCP   5d6h
+```
+The content of `create-service.yaml` is shown as below:
+```bash
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobilenet-coco300-service
+  namespace: yyn
+spec:
+  selector:
+    app: mobilenet-coco300-app-label
+  type: NodePort
+  ports:
+  - name: http
+    protocol: TCP
+    port: 5000  # the port of container
+    targetPort: 5000 # the cluster port for internal calls
+    nodePort: 31500  # the cluster port for external calls
+```
+Test the web service is successfully started, `192.168.3.130` is the IP of node (`tank-node3`) that deployed the pod, which provides `31500` port mapping the pod 
+```bash
+$ curl 192.168.3.130:31500/gpu
+ok
+```
+The output of "ok" means the web service is available now, and we use `nvidia-smi -l 1` command can see the inference processes has been created in `tank-node3`
+
+```bash
+$ nvidia-smi -l 1
+Wed Nov 13 22:16:48 2019
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 430.40       Driver Version: 430.40       CUDA Version: 10.1     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|===============================+======================+======================|
+|   0  GeForce RTX 208...  Off  | 00000000:18:00.0 Off |                  N/A |
+| 27%   26C    P8    15W / 250W |   5268MiB / 11019MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   1  GeForce RTX 208...  Off  | 00000000:3B:00.0 Off |                  N/A |
+| 27%   24C    P8    19W / 250W |      0MiB / 11019MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+|   2  GeForce RTX 208...  Off  | 00000000:86:00.0 Off |                  N/A |
+| 27%   24C    P8    22W / 250W |      0MiB / 11019MiB |      0%      Default |
++-------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------+
+| Processes:                                                       GPU Memory |
+|  GPU       PID   Type   Process name                             Usage      |
+|=============================================================================|
+|    0     38812      C   /usr/bin/python3                             657MiB |
+|    0     38825      C   /usr/bin/python3                             657MiB |
+|    0     38827      C   /usr/bin/python3                             657MiB |
+|    0     38830      C   /usr/bin/python3                             657MiB |
+|    0     38894      C   /usr/bin/python3                             657MiB |
+|    0     38977      C   /usr/bin/python3                             657MiB |
+|    0     39025      C   /usr/bin/python3                             657MiB |
+|    0     39089      C   /usr/bin/python3                             657MiB |
++-----------------------------------------------------------------------------+
+```
+
+# Part 2: Build Load generator
 The load generator is a Java maven project which is implemented using httpclient+threadpool that works in [open-loop](https://ieeexplore_ieee.xilesou.top/abstract/document/7581261/) [1], it has a web GUI for the realtime latency watch (e.g., 99th tail-latency, QPS, RPS, etc.). Meanwhile, the load generator provides RMI interface for external call and supports dynamically changeable request loads
 
 * support thousands level concurrent request per second in single node
@@ -28,13 +273,7 @@ The load generator is a Java maven project which is implemented using httpclient
            +----/webapp/*     # GUI pages
 ```
 
-## Hardware environment
-In our experiment environment, the configuration of nodes are shown as below:
 
-| hostname | description | IP |
-| ---- | ---- | ---- |
-| node1 | where the load generator is deployed | 192.168.3.110 |
-| node3 | where the inference service is deployed | 192.168.3.130 |
 
 ##  Build load generator
 The load generator is writen in Java, it can be deployed in container or host machine, and we need install Java JDK and apache tomcat before using it 
@@ -235,13 +474,43 @@ The client side need to setup the RMI connection before controling the load gene
 	}
 ```
 More tutorial of RMI interface can be see from [here](https://docs.oracle.com/javase/7/docs/technotes/guides/rmi/hello/hello-world.html)
-##  Future work
-The latest released version of load generator has satisfied our experiment needs, in the future, we plan to implement these functions as below:
-* Distributed load generator
-* Diversified output statistics (e.g., PDF, hist graph)
 
-##  Bug report & Question 
-We have used the load generator for a long time [2,3], and fixed many bugs that have been found. If you have some new findings, please contact us via Email: ynyang@tju.edu.cn
+# Performance evaluation of tools
+We evaluate the performance of load generator tool and web inference service and show the results as below: 
+### Performance testing of load generator
+To aviod the performance bottleneck of web service interfering the testing results, we set the request url in `LoadGen/src/main/resources/conf/sys.properties` to an empty url (this url does nothing and just returns 'helloworld')
+```bash
+mageClassifyBaseURL=http://192.168.3.130:31500/helloworld
+```
+Then we test the concurrent ability of load generator and collect the latency data, the client and server are deployed individually on two nodes that connected with 1Gbps WLAN
+
+![evaluationOfLoadGen](https://github.com/yananYangYSU/book/blob/master/evaluationOfLoadGen.png?raw=true)
+
+Fig.1 depicts the 99th tail-latency collected by load generator with the workloads ranges from `RPS=1` to `RPS=2000`, the requests are sent using multi-threads in [open-loop](https://ieeexplore_ieee.xilesou.top/abstract/document/7581261/), the worst 99th tail-latency < 250ms when the `RPS=2000`, which shows the low queue latency in load generator. Fig.2 shows the 99th tail-latency increases linearly with the `RPS`, this demonstrates the load generator is well designed and has a good performance of workload scalability. Fig.3 shows the CPU usage in server end with increasing `RPS`, which has a same trend with the tail-latency in Fig.1. The inference service consumes < 0.5 CPU core when `RPS=400`, while the CPU usage no more than 2 CPU cores when `RPS=2000`, it demonstrates the low overhead of guicorn+flask framework
+
+### Evalution for web inference service
+
+We evaluate the inference service using 8 web processes in ubuntu 16.04 with one GPU card GeForce RTX 2080 Ti, and the CPU is Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz, evaluation results are shown as below:
+
+| RPS | 1 | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| 99th latency /ms | 50.4 | 116 | 194 | 269 | 356 | 443 | 539 | 640 | 731 | 820 | 906 |
+| GPU usage % | 0.116 | 9.83 | 17.08 | 25.1 | 33.93 | 41.866| 51.15 | 61.7 | 70.5 | 79.5 | 88.4 |
+
+The inference 
+For `mobilenet-coco300-tf`, the image preprocess is done in CPU and the model inference is done with GPU, the average preprocess time is 0.010s, while the inference time for one picture is 0.065s. 
+
+From this table, we can see that single GPU card can support 50 concurrent requests per second while the 99th latency is nearly close to 1s, this is because the image inference takes a lot of SM core in GPU (nearly 90%), and we have varified this phenomenon is similar as the production environment in company, so the design of our web inference is rational and reliable  
+
+
+## Question and Support
+We have used the load generator for a long time in our work [2,3], and fixed many bugs that have been found. 
+While web inference service is continusly in update, any question please contact us via email. The author is a first year Phd student in TianJin University, China
+
+Enjoy coding, enjoy life<br>
+Email: ynyang@tju.edu.cn
+
+
 
 ## Reference
 [1] Kasture H, Sanchez D. Tailbench: a benchmark suite and evaluation methodology for latency-critical applications[C]//2016 IEEE International Symposium on Workload Characterization (IISWC). IEEE, 2016: 1-10.<br>
