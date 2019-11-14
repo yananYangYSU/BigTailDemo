@@ -1,6 +1,6 @@
 # HTTP interface of MLperf inference benchmark 
 
-Based on the MLperf, we packaged the inference model into web services in addtion to the existing script operation mode in MLperf. And we also designed a load generator to send http requests for measurement. The web service is implemented using python flask+guicorn framework which can work in concurrent request scenarios. The load generator is implemented using java httpclient+threadpool that works in open-loop, and it has a web GUI for the realtime measurement of metrics (e.g., 99th tail-latency, QPS, RPS, etc.). Meanwhile, the load generator provides RMI interface for external call and can produce dynamically changeable request loads.
+Based on the [MLperf](https://github.com/mlperf/inference), we packaged the inference model into web services in addtion to the existing script operation mode in MLperf. And we also designed a load generator to send http requests for measurement. The web service is implemented using python flask+guicorn framework which can work in concurrent request scenarios. The load generator is implemented using java httpclient+threadpool that works in [open-loop](https://ieeexplore_ieee.xilesou.top/abstract/document/7581261/) [1], and it has a web GUI for the realtime measurement of metrics (e.g., 99th tail-latency, QPS, RPS, etc.). Meanwhile, the load generator provides RMI interface for external call and can produce dynamically changeable request loads.
 
 ## Web inference
 * currently support `mobilenet-coco300-tf` and `resnet-coco1200-tf` model inference, in continuous update... (easy to scale)
@@ -90,7 +90,7 @@ start-service-mobilenet-coco300-tf.sh
 We use the kubernetes to create the pod and service of inference, the container mounts host's files and directories to it's volume when it is created
 
 The files and directories in host machine are showed as follows:
-```python
+```bash
 /home/tank/yanan
           |----/data
           |    +----/coco-300
@@ -101,7 +101,7 @@ The files and directories in host machine are showed as follows:
           +----/inference/v0.5/classification_and_detection/*
 ```
 The files and directories in container are showed as follows:
-```python
+```bash
 /----/home/script/start-service-mobilenet-coco300-tf.sh
 |    +----/inference/v0.5/classification_and_detection/*   
 |
@@ -285,7 +285,7 @@ Open the exlporer and visit url `http://192.168.3.110:8080/sdcloud`
 The GUI page is showed as follows:
 
 
-![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191113230835.png?raw=true)
+![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/GUIpage.png?raw=true)
  
 We provide four url interfaces to control the load generator, including:
 
@@ -298,7 +298,7 @@ We provide four url interfaces to control the load generator, including:
 
 For examle, firstly, we click the `startOnlineQuery.do?intensity=1&serviceId=0` link to generate request loads, and the page will in a waiting state, then after `$windowSize seconds`, click the `goOnlineQuery.do?serviceId=0` link to the real-time latency page as follows. 
 
-![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/%E5%BE%AE%E4%BF%A1%E6%88%AA%E5%9B%BE_20191112164606.png?raw=true)
+![realtime Latency](https://github.com/yananYangYSU/BigTailDemo/blob/master/realtime-latency.png?raw=true)
 Metrics in real-time latency page:
 * queryTime: The 99th tail-latency of the concurrent requests per second
 * realRPS: The concurrent requests number of last second from client, RPS (request per second)
@@ -308,11 +308,66 @@ Metrics in real-time latency page:
 * SR: The average service rate in `$windowsize` time scale, `SR=AvgQPS/AvgRPS*100%`
 * Avg99th: The average `queryTimes` in `$windowsize` time scale   
 
-At the runtime of load generator, click the `setIntensity.do?intensity=N&serviceId=0` link to change the RPS, please replace `N` to the number of concurrent requests per second you want. Finally, click `stopOnlineQuery.do?serviceId=0` to stop the load testing.
+At the runtime of load generator, click the `setIntensity.do?intensity=N&serviceId=0` link to change the RPS, please replace `N` to the number of concurrent requests per second you want. Finally, click `stopOnlineQuery.do?serviceId=0` to stop the load testing
 
 ## Part 3: Performance evaluation of tools
 We evaluate the performance of load generator tool and web inference service and show the results as follows: 
 ### Performance evaluation of load generator
-we set the request url in `LoadGen/src/main/resources/conf/sys.properties` to a empty url `imageClassifyBaseURL=http://192.168.3.130:31500/helloworld`, and test the concurrent ability of load generator
+we set the request url in `LoadGen/src/main/resources/conf/sys.properties` to an empty url 
+```bash
+mageClassifyBaseURL=http://192.168.3.130:31500/helloworld
+```
+> Note that this url does nothing and just returns 'helloworld'
 
-![evaluationOfLoadGen](https://github.com/yananYangYSU/BigTailDemo/blob/master/evaluationOfLoadGen.png?raw=true)
+We test the concurrent ability of load generator using this empty url in 1Gbps WLAN, the client and server are deployed on two nodes individually
+
+![evaluationOfLoadGen](https://github.com/yananYangYSU/BigTailDemo/blob/master/evaluationOfLoadGen.png?raw=true&rand=1)
+
+Fig.1 depicts the 99th tail-latency collected by load generator with the workloads ranges from `RPS=1` to `RPS=2000`, the requests are sent using multi-threads in [open-loop](https://ieeexplore_ieee.xilesou.top/abstract/document/7581261/), the worst 99th tail-latency < 250ms when the `RPS=2000`, which shows the low queue latency in load generator. Fig.2 shows the 99th tail-latency increases linearly with the `RPS`, this demonstrates the load generator is well designed and has a good performance of workload scalability. Fig.3 shows the CPU usage in server end with increasing `RPS`, which has a same trend with the tail-latency in Fig.1. The inference service consumes < 0.5 CPU core when `RPS=400`, while the CPU usage no more than 2 CPU cores when `RPS=2000`, it demonstrates the low overhead of guicorn+flask framework
+
+### Evalution for web inference service
+
+We 
+
+| RPS | 1 | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| 99th /ms | 50.4 | 116 | 194 | 269 | 356 | 443 | 539 | 640 | 731 | 820 | 906 |
+| GPU% | 0.116 | 9.83 | 17.08 | 25.1 | 33.93 | 41.866| 51.15 | 61.7 | 70.5 | 79.5 | 88.4 |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1] Kasture H, Sanchez D. Tailbench: a benchmark suite and evaluation methodology for latency-critical applications[C]//2016 IEEE International Symposium on Workload Characterization (IISWC). IEEE, 2016: 1-10.
+
+
